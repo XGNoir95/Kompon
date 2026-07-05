@@ -16,8 +16,7 @@ import {
   combineScores,
   generateChecklist,
 } from "../services/scoringEngine.js";
-import HazardPoint from "../models/HazardPoint.js";
-import ScenarioPoint from "../models/ScenarioPoint.js";
+import { getNearestHazardPoint, getNearestScenarioPoint } from "../services/duckdbClient.js";
 import { VALID_EVENT_IDS, questionnaireSchema } from "../middleware/validate.js";
 
 const router = Router();
@@ -186,14 +185,7 @@ router.post(
       let hazardPointData = null;
       if (hasLocation) {
         try {
-          const nearest = await HazardPoint.findOne({
-            location: {
-              $near: {
-                $geometry: { type: "Point", coordinates: [lon, lat] },
-                $maxDistance: 500, // meters, matches 250m grid spacing
-              },
-            },
-          }).lean();
+          const nearest = await getNearestHazardPoint(lat, lon);
 
           if (nearest) {
             siteHazardScore = nearest.ground_susceptibility_score;
@@ -216,15 +208,7 @@ router.post(
       if (hasLocation && scenarioEventId) {
         try {
           // Look up pre-computed scenario features for this location and event
-          const scenarioPoint = await ScenarioPoint.findOne({
-            event_id: scenarioEventId,
-            location: {
-              $near: {
-                $geometry: { type: "Point", coordinates: [lon, lat] },
-                $maxDistance: 500,
-              },
-            },
-          }).lean();
+          const scenarioPoint = await getNearestScenarioPoint(scenarioEventId, lat, lon);
 
           if (scenarioPoint) {
             // Call HF Space for Model 3 scenario score
