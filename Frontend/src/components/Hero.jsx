@@ -1,17 +1,26 @@
-import { useState } from 'react'
-import { ArrowRight, Image as ImageIcon } from 'lucide-react'
-import { motion } from 'framer-motion'
-import { buttonHover, buttonTap, sectionGroup, sectionItem, sectionViewport } from '../lib/motion.js'
-import { type } from '../lib/typography.js'
+import { useState } from "react";
+import { ArrowRight, Image as ImageIcon } from "lucide-react";
+import { motion } from "framer-motion";
+import {
+  buttonHover,
+  buttonTap,
+  sectionGroup,
+  sectionItem,
+  sectionViewport,
+} from "../lib/motion.js";
+import { type } from "../lib/typography.js";
 
 // Drop a file at Frontend/public/hero-coast.jpg (any wide photo) to replace the placeholder.
-const HERO_IMAGE = '/hero-coast.jpg'
+const HERO_IMAGE = "/hero-coast2.png";
 
 function Hero() {
-  const [imageReady, setImageReady] = useState(false)
+  const [imageReady, setImageReady] = useState(false);
 
   return (
-    <section id="hero" className="relative overflow-hidden bg-[#121212] text-white">
+    <section
+      id="hero"
+      className="relative overflow-hidden bg-[#121212] text-white"
+    >
       {/* Background image layer + placeholder fallback */}
       <div className="absolute inset-0">
         <div className="absolute inset-0 bg-gradient-to-br from-[#1b1b1b] via-[#141414] to-[#242424]" />
@@ -22,7 +31,7 @@ function Hero() {
           onLoad={() => setImageReady(true)}
           onError={() => setImageReady(false)}
           className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-700 ${
-            imageReady ? 'opacity-100' : 'opacity-0'
+            imageReady ? "opacity-100" : "opacity-0"
           }`}
         />
         {/* readability overlay */}
@@ -30,7 +39,9 @@ function Hero() {
 
         {/* Placeholder hint (shown until a real image loads) */}
         {!imageReady && (
-          <div className={`absolute right-6 top-6 hidden items-center gap-2 rounded-full border border-white/15 bg-black/30 px-3 py-1.5 font-semibold text-white/70 backdrop-blur sm:flex ${type.legal}`}>
+          <div
+            className={`absolute right-6 top-6 hidden items-center gap-2 rounded-full border border-white/15 bg-black/30 px-3 py-1.5 font-semibold text-white/70 backdrop-blur sm:flex ${type.legal}`}
+          >
             <ImageIcon size={14} className="text-[#ff5330]" />
             Drop your photo at /public/hero-coast.jpg
           </div>
@@ -45,14 +56,21 @@ function Hero() {
         whileInView="visible"
         viewport={sectionViewport}
       >
-        <motion.div className="max-w-[560px] sm:mx-auto lg:mx-0" variants={sectionItem}>
-          <span className="mb-6 block h-0.5 w-12 bg-[#ff5330]" aria-hidden="true" />
+        <motion.div
+          className="max-w-[560px] sm:mx-auto lg:mx-0"
+          variants={sectionItem}
+        >
+          <span
+            className="mb-6 block h-0.5 w-12 bg-[#ff5330]"
+            aria-hidden="true"
+          />
           <h1 className="text-[40px] font-extrabold leading-[1.03] tracking-tight sm:text-[52px] md:text-[62px] lg:text-[72px]">
             Describe what your company does
           </h1>
           <p className="my-6 max-w-[460px] text-justify text-sm font-medium leading-[1.6] text-[#dcdcdc] sm:text-[15px] md:text-base">
-            Describe exactly what the company does and what a customer can expect
-            when working with the company. Keep it short and free of jargon.
+            Describe exactly what the company does and what a customer can
+            expect when working with the company. Keep it short and free of
+            jargon.
           </p>
           <motion.button
             className="group inline-flex items-center gap-3 rounded-full bg-[#ff5330] py-2 pl-6 pr-2 text-sm font-bold text-white"
@@ -67,6 +85,83 @@ function Hero() {
           </motion.button>
         </motion.div>
       </motion.div>
+
+      {/* Earthquake risk annotations — orange arrows with a white root marker, large screens only */}
+      <div className="pointer-events-none absolute inset-0 z-10 hidden lg:block">
+        {/* Annotation 1: arrow rises up toward the label */}
+        <div className="absolute right-[4%] top-[16%] flex items-start xl:right-[13%]">
+          <svg
+            className="h-[176px] w-[194px] shrink-0 overflow-visible"
+            viewBox="0 0 160 145"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path
+              d="M20,130 L20,60 L142.08,15.37"
+              stroke="#ff5330"
+              strokeWidth="2.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M133.81,24.78 L142.08,15.37 L129.69,13.51"
+              fill="none"
+              stroke="#ff5330"
+              strokeWidth="2.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <circle
+              cx="20"
+              cy="132"
+              r="9"
+              fill="#ffffff"
+              stroke="#ff5330"
+              strokeWidth="3.2"
+            />
+          </svg>
+          <p className="max-w-[278px] text-[20px] font-bold leading-snug text-white [text-shadow:0_1px_12px_rgb(0_0_0/0.6)]">
+            Bangladesh lies at the junction of three tectonic plates
+          </p>
+        </div>
+
+        {/* Annotation 2: arrow drops down toward the label */}
+        <div className="absolute right-[7%] top-[52%] flex items-end xl:right-[20%]">
+          <svg
+            className="h-[176px] w-[194px] shrink-0 overflow-visible"
+            viewBox="0 0 160 145"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path
+              d="M20,25 L20,95 L146.19,126.21"
+              stroke="#ff5330"
+              strokeWidth="2.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M134.07,129.39 L146.19,126.21 L136.95,117.75"
+              fill="none"
+              stroke="#ff5330"
+              strokeWidth="2.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <circle
+              cx="20"
+              cy="16"
+              r="9"
+              fill="#ffffff"
+              stroke="#ff5330"
+              strokeWidth="3.2"
+            />
+          </svg>
+          <p className="pl-1 max-w-[278px] text-[20px] font-bold text-white [text-shadow:0_1px_12px_rgb(0_0_0/0.6)]">
+            Over 250 earthquakes have struck the country in 50 years
+          </p>
+        </div>
+      </div>
 
       {/* Torn / watercolor white bottom edge that bleeds into the map section */}
       <div className="pointer-events-none absolute inset-x-0 -bottom-px z-10 leading-[0]">
@@ -94,7 +189,7 @@ function Hero() {
         </svg>
       </div>
     </section>
-  )
+  );
 }
 
-export default Hero
+export default Hero;
