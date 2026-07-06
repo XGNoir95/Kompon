@@ -2,9 +2,8 @@
 // Main server entry point. No ML libraries here — stays light so
 // cold starts are fast and 512MB RAM is never a problem.
 
-// dotenv/config runs as a side effect during import — must be FIRST
-// so env vars are available when other modules (Redis, etc.) initialize.
-import "dotenv/config";
+// Load Backend/.env before modules that read process.env at import time.
+import "./config/env.js";
 
 import express from "express";
 import compression from "compression";
@@ -16,6 +15,7 @@ import { refreshNewsCache } from "./services/newsClient.js";
 // Route imports
 import riskAssessmentRouter from "./routes/riskAssessment.js";
 import newsRouter from "./routes/news.js";
+import earthquakesRouter from "./routes/earthquakes.js";
 import safePlacesRouter from "./routes/safePlaces.js";
 import fireBrigadeRouter from "./routes/fireBrigade.js";
 import hazardRouter from "./routes/hazard.js";
@@ -56,6 +56,7 @@ app.get("/health", (_req, res) => {
 // ─── API routes (§6.1–6.5) ───
 app.use("/v1/risk-assessment", riskAssessmentRouter);
 app.use("/v1/news", newsRouter);
+app.use("/v1/earthquakes", earthquakesRouter);
 app.use("/v1/safe-places", safePlacesRouter);
 app.use("/v1/fire-brigade", fireBrigadeRouter);
 app.use("/v1/hazard", hazardRouter);
@@ -65,7 +66,7 @@ app.use("/v1/chat", chatRouter);
 app.use((_req, res) => {
   res.status(404).json({
     error: "Endpoint not found.",
-    hint: "Available endpoints: /v1/risk-assessment, /v1/news/earthquakes, /v1/safe-places, /v1/fire-brigade/search, /v1/hazard/static, /health",
+    hint: "Available endpoints: /v1/risk-assessment, /v1/news/earthquakes, /v1/earthquakes/recent, /v1/safe-places, /v1/fire-brigade/search, /v1/hazard/static, /health",
   });
 });
 
