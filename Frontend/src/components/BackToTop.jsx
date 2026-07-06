@@ -12,7 +12,7 @@ function BackToTop() {
 
   return (
     <motion.button
-      className="fixed bottom-[90px] right-5 z-40 grid h-14 w-14 place-items-center rounded-full border border-[#121212] bg-[#121212] text-white shadow-sm transition-colors hover:border-[#ff5330] hover:bg-[#ff5330] md:bottom-[100px] md:right-7"
+      className="fixed bottom-[156px] right-5 z-40 grid h-14 w-14 place-items-center rounded-full border border-[#121212] bg-[#121212] text-white shadow-sm transition-colors hover:border-[#ff5330] hover:bg-[#ff5330] md:bottom-[164px] md:right-7"
       type="button"
       aria-label="Back to top"
       onClick={goToTop}
