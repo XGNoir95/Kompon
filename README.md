@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Frontend/public/kompon-logo.svg" alt="Kompon Logo" width="80" />
+  <img src="Frontend/public/kompon_light.png" alt="Kompon Logo" width="80" />
 </p>
 
 <h1 align="center">Kompon</h1>
@@ -45,9 +45,9 @@
   - [ML Inference Pipeline](#ml-inference-pipeline)
   - [Risk Assessment Pipeline (End-to-End)](#risk-assessment-pipeline-end-to-end)
 - [ML Models — Deep Dive](#ml-models--deep-dive)
-  - [Model 0 — Image Validity Gate (MobileNetV3-Small)](#model-0--image-validity-gate-mobilenetv3-small)
-  - [Model A — Crack/Damage Segmentation (YOLOv8-seg)](#model-a--crackdamage-segmentation-yolov8-seg)
-  - [Model 3 — Scenario Liquefaction Scoring (LightGBM)](#model-3--scenario-liquefaction-scoring-lightgbm)
+  - [Model 1 — Image Validity Gate (MobileNetV3-Small)](#model-1--image-validity-gate-mobilenetv3-small)
+  - [Model 2 — Damage Severity Detection (YOLOv8-seg)](#model-2--damage-severity-detection-yolov8-seg)
+  - [Model 3 — Ground Failure Prediction (LightGBM)](#model-3--ground-failure-prediction-lightgbm)
   - [Model Weight Loading Strategy](#model-weight-loading-strategy)
 - [Scoring Engine](#scoring-engine)
 - [Backend — Full Pipeline](#backend--full-pipeline)
@@ -146,7 +146,7 @@ Kompon addresses all of these with a single integrated platform.
 ### 🚒 Emergency Services Directory
 - **Fire brigade lookup** by district and upazila
 - **Phone numbers and station names** for all Bangladesh divisions
-- **MongoDB-backed** with JSON fallback for offline operation
+- **Static JSON dataset** covering all fire stations across Bangladesh
 
 ---
 
@@ -177,7 +177,7 @@ Kompon addresses all of these with a single integrated platform.
 │  ├─ GET  /v1/news/earthquakes ← Cached news feed                  │
 │  ├─ GET  /v1/earthquakes/recent ← USGS live feed                  │
 │  ├─ GET  /v1/safe-places      ← Overpass/OSM query                │
-│  ├─ GET  /v1/fire-brigade/search ← MongoDB/JSON lookup            │
+│  ├─ GET  /v1/fire-brigade/search ← JSON data lookup               │
 │  ├─ GET  /v1/hazard/static    ← DuckDB heatmap layers             │
 │  ├─ POST /v1/chat             ← LLM chatbot                       │
 │  └─ GET  /health              ← UptimeRobot health check          │
@@ -201,7 +201,7 @@ Kompon addresses all of these with a single integrated platform.
 │                                                                     │
 │  POST /infer/image-risk                                            │
 │  ┌────────────────┐     ┌─────────────────────┐                    │
-│  │ Model 0 (Gate) │ ──→ │ Model A (YOLOv8-seg)│                   │
+│  │ Model 1 (Gate) │ ──→ │ Model 2 (YOLOv8-seg)│                   │
 │  │ MobileNetV3    │     │ 5-class damage       │                   │
 │  │ 3-class        │     │ segmentation         │                   │
 │  └────────────────┘     └─────────────────────┘                    │
@@ -209,7 +209,7 @@ Kompon addresses all of these with a single integrated platform.
 │  POST /infer/scenario-score                                        │
 │  ┌─────────────────────────────┐                                   │
 │  │ Model 3 (LightGBM)         │                                   │
-│  │ Scenario liquefaction       │                                   │
+│  │ Ground failure              │                                   │
 │  │ regressor                   │                                   │
 │  └─────────────────────────────┘                                   │
 │                                                                     │
@@ -218,7 +218,6 @@ Kompon addresses all of these with a single integrated platform.
 
 External Services:
   ├─ Upstash Redis      — Caching + rate limiting (REST API)
-  ├─ MongoDB Atlas      — Fire brigade directory
   ├─ USGS               — Live earthquake feed (GeoJSON)
   ├─ Currents API       — Earthquake news (primary)
   ├─ GDELT DOC 2.0      — Earthquake news (fallback)
@@ -241,7 +240,7 @@ User uploads image
          │ Buffer (JPEG)
          ▼
 ┌──────────────────┐
-│  MODEL 0 — GATE  │  ← MobileNetV3-Small, 3-class classifier
+│  MODEL 1 — GATE  │  ← MobileNetV3-Small, 3-class classifier
 │                   │    Classes: building_surface, road_or_pavement, other
 │  Quality checks:  │    • Resolution ≥ 200px shortest side
 │  • Blur (Laplacian│    • Brightness 40–215 mean luma
@@ -257,8 +256,8 @@ User uploads image
          │ ACCEPT
          ▼
 ┌──────────────────┐
-│  MODEL A — CRACK │  ← YOLOv8-seg, 5-class instance segmentation
-│  SEGMENTATION    │    • microcrack          → Low concern
+│  MODEL 2 — DAMAGE│  ← YOLOv8-seg, 5-class instance segmentation
+│  DETECTION       │    • microcrack          → Low concern
 │                  │    • structural_crack     → High concern
 │  imgsz=640       │    • spalling             → Moderate concern
 │  conf=0.25       │    • rebar_corrosion      → Very High concern
@@ -291,7 +290,7 @@ User uploads image
               ▼                  ▼                  ▼
      ┌────────────────┐ ┌───────────────┐ ┌──────────────────┐
      │ ML Space Call  │ │ Questionnaire │ │ Geospatial       │
-     │ (Model 0 + A) │ │ Scoring       │ │ Lookups          │
+     │ (Model 1 + 2) │ │ Scoring       │ │ Lookups          │
      │                │ │ (FEMA P-154   │ │ • DuckDB hazard  │
      │ Gate → Crack   │ │  inspired)    │ │   grid (Parquet) │
      │ analysis       │ │               │ │ • Scenario point │
@@ -335,7 +334,7 @@ User uploads image
 
 ## ML Models — Deep Dive
 
-### Model 0 — Image Validity Gate (MobileNetV3-Small)
+### Model 1 — Image Validity Gate (MobileNetV3-Small)
 
 | Property | Detail |
 |----------|--------|
@@ -355,11 +354,11 @@ User uploads image
 - **Brightness**: Mean luma must be between 40–215 (rejects too dark / overexposed)
 - **Blur detection**: Variance of Laplacian ≥ 60 (manual 3×3 kernel, no OpenCV dependency)
 
-**Design philosophy**: The gate uses an *accept-on-uncertainty* strategy — it's better to run Model A on a borderline image than to reject a genuine building crack.
+**Design philosophy**: The gate uses an *accept-on-uncertainty* strategy — it's better to run Model 2 on a borderline image than to reject a genuine building crack.
 
 ---
 
-### Model A — Crack/Damage Segmentation (YOLOv8-seg)
+### Model 2 — Damage Severity Detection (YOLOv8-seg)
 
 | Property | Detail |
 |----------|--------|
@@ -385,7 +384,7 @@ User uploads image
 
 ---
 
-### Model 3 — Scenario Liquefaction Scoring (LightGBM)
+### Model 3 — Ground Failure Prediction (LightGBM)
 
 | Property | Detail |
 |----------|--------|
@@ -457,7 +456,7 @@ The **Scoring Engine** (`scoringEngine.js`) combines up to 4 component scores in
 | Component | Weight | Source |
 |-----------|--------|--------|
 | Structural Vulnerability | **0.35** | Questionnaire (FEMA P-154 inspired) |
-| Crack Evidence | **0.30** | Model A output |
+| Crack Evidence | **0.30** | Model 2 output |
 | Site Hazard | **0.20** | DuckDB Parquet lookup (optional) |
 | Scenario Shaking | **0.15** | Model 3 output (optional) |
 
@@ -524,9 +523,9 @@ Backend/
 │   │   ├── earthquakeTool.js  # LLM function calling tool
 │   │   └── overpassClient.js  # OpenStreetMap safe places
 │   ├── models/
-│   │   ├── FireStation.js     # Mongoose schema
-│   │   ├── HazardPoint.js     # Mongoose schema
-│   │   └── ScenarioPoint.js   # Mongoose schema
+│   │   ├── FireStation.js     # Data schema
+│   │   ├── HazardPoint.js     # Data schema
+│   │   └── ScenarioPoint.js   # Data schema
 │   └── scripts/
 │       └── fetchServingData.js # HF Datasets Parquet downloader
 ├── data/                       # Runtime data (Parquet, heatmap cache)
@@ -582,8 +581,7 @@ Request → helmet (security headers)
 |---------|-----------|---------|
 | **Geospatial queries** | DuckDB (in-memory) | Nearest-point lookup on Parquet files (hazard grid + 8 scenarios) |
 | **Parquet data** | HF Datasets repo | 9 files: 1 hazard grid + 8 scenario grids, downloaded at startup |
-| **Fire brigade** | MongoDB Atlas | Fire station directory (district/upazila indexed) |
-| **Fire brigade fallback** | JSON file | `fire_service.json` — static fallback when MongoDB is unavailable |
+| **Fire brigade** | JSON file | `fire_service.json` — static fire station directory for all Bangladesh divisions |
 | **Caching** | Upstash Redis | News cache (30min), safe places cache (7 days), rate limit counters |
 | **Heatmap cache** | Filesystem JSON | Pre-computed CSV→JSON at startup for fast heatmap serving |
 
@@ -799,7 +797,6 @@ server {
 | `HF_DATASET_REPO` | **Yes** | HF Datasets repo for Parquet files |
 | `UPSTASH_REDIS_REST_URL` | **Yes** | Upstash Redis REST endpoint |
 | `UPSTASH_REDIS_REST_TOKEN` | **Yes** | Upstash Redis auth token |
-| `MONGODB_URI` | No | MongoDB Atlas connection string |
 | `CURRENTS_API_KEY` | No | Currents API key for earthquake news |
 | `GROQ_API_KEY` | **Yes** | Groq API key for chatbot |
 | `GEMINI_API_KEY` | No | Google Gemini API key (chatbot fallback) |
@@ -832,7 +829,6 @@ server {
 | **Hugging Face Hub** | Model weight downloads, Parquet dataset hosting | Filesystem (permanent) |
 | **Groq API** | Llama 3.1 8B Instant (chatbot primary) | None |
 | **Google Gemini API** | Gemini 2.5 Flash (chatbot fallback) | None |
-| **MongoDB Atlas** | Fire brigade directory | None |
 
 ---
 
@@ -872,7 +868,6 @@ server {
 | Node.js | ≥ 20 | Runtime |
 | Express | 4.21 | Web framework |
 | DuckDB | 1.5 | In-memory OLAP (Parquet queries) |
-| Mongoose | 8.9 | MongoDB ODM |
 | Multer | 1.4 | Multipart file upload handling |
 | Sharp | 0.33 | Image processing / EXIF stripping |
 | Zod | 3.24 | Schema validation |
@@ -886,9 +881,9 @@ server {
 |-----------|---------|---------|
 | FastAPI | 0.115 | High-performance async API framework |
 | Uvicorn | 0.34 | ASGI server |
-| PyTorch | 2.5 | Deep learning framework (Model 0) |
+| PyTorch | 2.5 | Deep learning framework (Model 1) |
 | torchvision | 0.20 | Pretrained model architectures |
-| Ultralytics | 8.3 | YOLOv8 inference (Model A) |
+| Ultralytics | 8.3 | YOLOv8 inference (Model 2) |
 | LightGBM | 4.5 | Gradient boosting (Model 3) |
 | Pillow | 11.1 | Image processing |
 | huggingface_hub | 0.27 | Dynamic weight downloading |
@@ -900,7 +895,6 @@ server {
 | Docker + Docker Compose | Containerization |
 | Nginx | Frontend reverse proxy + SPA routing |
 | Upstash Redis | Serverless caching + rate limiting |
-| MongoDB Atlas | Document database |
 | Hugging Face Spaces | ML model hosting (Docker SDK) |
 | Hugging Face Datasets | Parquet data hosting |
 | GitHub Actions | CI/CD pipeline |
@@ -926,7 +920,7 @@ Kompon/
 │   │   ├── routes/            # 7 API route modules
 │   │   ├── services/          # 10 service modules
 │   │   ├── middleware/        # Security, rate limiting, validation
-│   │   ├── models/            # Mongoose schemas
+│   │   ├── models/            # Data schemas
 │   │   ├── scripts/           # Data fetching utilities
 │   │   └── server.js          # Entry point
 │   ├── data/                  # Runtime data (Parquet, cache)
@@ -1139,8 +1133,8 @@ The design system includes:
 >
 > Results are based on machine learning models trained on limited data and a short questionnaire. They should never be used as the sole basis for structural decisions.
 >
-> - Model A was trained for 5 specific damage types and may miss other forms of structural failure.
-> - Model 3 is based on 8 earthquakes (M5.0–M6.9) and may not generalize to all scenarios.
+> - Model 2 (Damage Severity Detection) was trained for 5 specific damage types and may miss other forms of structural failure.
+> - Model 3 (Ground Failure Prediction) is based on 8 earthquakes (M5.0–M6.9) and may not generalize to all scenarios.
 > - **High or Very High findings should always be referred to a licensed structural engineer.**
 > - The absence of detected damage does **not** mean a building is safe.
 >

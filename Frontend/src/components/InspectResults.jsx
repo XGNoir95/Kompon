@@ -100,7 +100,7 @@ export default function InspectResults({ result, imagePreview, onBack, onReset }
     >
       <div className="grid items-stretch gap-6 lg:grid-cols-2">
         <motion.div
-          className="grid h-full min-h-[560px] content-between gap-5 border border-[#c8c8c8] bg-[#fafafa] p-5 sm:p-6"
+          className="grid h-full min-h-[560px] content-center gap-5 border border-[#c8c8c8] bg-[#fafafa] p-5 sm:p-6"
           initial={{ x: -18, opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}
           transition={{ duration: 0.35 }}

@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { api } from '../config/api.js'
 import InspectResults from '../components/InspectResults.jsx'
+import { GEOLOCATION_REQUIRED_MESSAGE, requestDeviceLocation } from '../lib/geolocation.js'
 import { buttonTap, sectionGroup, sectionItem, sectionViewport } from '../lib/motion.js'
 import { type } from '../lib/typography.js'
 
@@ -14,7 +15,7 @@ import { type } from '../lib/typography.js'
 const STEPS = [
   { title: 'Capture a building photo', body: 'Take a clear photo of a wall, column, beam joint, or other building surface for crack analysis.' },
   { title: 'Building questionnaire', body: 'Answer a few quick questions about the building to improve the risk assessment accuracy.' },
-  { title: 'Location (optional)', body: 'Share your location for site hazard and soil analysis. This step is optional but improves accuracy.' },
+  { title: 'Location required', body: 'Share your location for site hazard and soil analysis before submitting the assessment.' },
   { title: 'Analyzing your building', body: 'Our ML models are analyzing the image and computing a risk score. This may take up to 30 seconds.' },
   { title: 'Assessment complete', body: 'Review your building risk assessment results below.' },
 ]
@@ -86,6 +87,7 @@ const LOADING_MSGS = [
   'Combining questionnaire and location evidence...',
   'Calculating final severity score...',
 ]
+const MIN_ANALYSIS_MS = 9000
 
 const isLikelyMobileBrowser = () => {
   if (typeof navigator === 'undefined' || typeof window === 'undefined') return false
@@ -117,9 +119,9 @@ const STEP_DETAILS = [
   {
     title: 'Location and shaking',
     items: [
-      'Location is optional and only used to check nearby hazard and scenario grid points.',
+      'Location is required so the assessment can check nearby hazard and scenario grid points.',
       'Scenario labels represent the trained earthquake event IDs available in the backend.',
-      'If you skip location, the assessment still uses the photo and questionnaire.',
+      'If permission is blocked, enable location in your browser or device settings and try again.',
     ],
   },
   {
@@ -127,7 +129,7 @@ const STEP_DETAILS = [
     items: [
       'The backend validates and resizes the image before forwarding it to the ML service.',
       'The first model checks whether the image looks like a building surface.',
-      'Crack evidence, questionnaire answers, and optional location signals are combined into one score.',
+      'Crack evidence, questionnaire answers, and required location signals are combined into one score.',
     ],
   },
 ]
@@ -135,7 +137,7 @@ const STEP_DETAILS = [
 function StepInfoPanel({ step, className = '' }) {
   const detail = STEP_DETAILS[Math.min(step, STEP_DETAILS.length - 1)]
   return (
-    <div className={`grid content-start gap-4 border border-[#c8c8c8] bg-[#fafafa] p-5 ${className}`}>
+    <div className={`grid content-center gap-4 border border-[#c8c8c8] bg-[#fafafa] p-5 ${className}`}>
       <div>
         <p className={`m-0 text-[#ff5330] ${type.overline}`}>Current stage</p>
         <h3 className={`m-0 mt-2 text-[#121212] ${type.cardTitle}`}>{detail.title}</h3>
@@ -206,6 +208,7 @@ function Inspect() {
   const [scenarioEventId, setScenarioEventId] = useState('')
   const [userPos, setUserPos] = useState(null)
   const [geoStatus, setGeoStatus] = useState('idle')
+  const locationRequestRef = useRef(null)
   const [dragActive, setDragActive] = useState(false)
   const [loading, setLoading] = useState(false)
   const [loadingMsg, setLoadingMsg] = useState(LOADING_MSGS[0])
@@ -213,9 +216,25 @@ function Inspect() {
   const [result, setResult] = useState(null)
   const [rejected, setRejected] = useState(null)
   const [isMobileUpload, setIsMobileUpload] = useState(() => isLikelyMobileBrowser())
+  const formRef = useRef(null)
   const galleryRef = useRef(null)
   const cameraRef = useRef(null)
   const msgInterval = useRef(null)
+  const assessmentRunRef = useRef(0)
+
+  const scrollFormIntoView = useCallback(() => {
+    if (typeof window === 'undefined' || !window.matchMedia('(max-width: 1023px)').matches) return
+
+    window.requestAnimationFrame(() => {
+      const formTop = formRef.current?.getBoundingClientRect().top
+      if (formTop == null) return
+
+      window.scrollTo({
+        top: Math.max(0, window.scrollY + formTop - 82),
+        behavior: 'smooth',
+      })
+    })
+  }, [])
 
   const stopLoadingTicker = useCallback(() => {
     clearInterval(msgInterval.current)
@@ -237,10 +256,12 @@ function Inspect() {
   }, [])
 
   const reset = () => {
+    assessmentRunRef.current += 1
     setStep(0); setImageFile(null); setImagePreview(null)
     setQuestionnaire({ ...DEFAULT_Q }); setQuestionnaireSlide(0); setScenarioEventId(''); setUserPos(null); setGeoStatus('idle'); setDragActive(false)
     setLoading(false); setError(null); setResult(null); setRejected(null)
     stopLoadingTicker()
+    scrollFormIntoView()
   }
 
   /* Image handling */
@@ -249,7 +270,15 @@ function Inspect() {
     const valid = ['image/jpeg', 'image/png', 'image/webp']
     if (!valid.includes(file.type)) { setError('Please upload a JPEG, PNG, or WebP image.'); return }
     if (file.size > 8 * 1024 * 1024) { setError('Image must be under 8MB.'); return }
-    setError(null); setRejected(null); setResult(null); setImageFile(file)
+    const isReplacement = !!imageFile || !!imagePreview || step > 0
+    stopLoadingTicker()
+    setError(null); setRejected(null); setResult(null); setLoading(false); setLoadingMsg(LOADING_MSGS[0]); setImageFile(file)
+    setQuestionnaireSlide(0)
+    assessmentRunRef.current += 1
+    if (isReplacement) {
+      setStep(1)
+    }
+    scrollFormIntoView()
     const reader = new FileReader()
     reader.onload = (e) => setImagePreview(e.target.result)
     reader.readAsDataURL(file)
@@ -272,19 +301,54 @@ function Inspect() {
   const updateQ = (key, value) => setQuestionnaire(prev => ({ ...prev, [key]: value }))
 
   /* Geolocation */
-  const getLocation = useCallback(() => {
-    if (!navigator.geolocation) { setGeoStatus('denied'); return }
+  const getLocation = useCallback(async () => {
+    if (locationRequestRef.current) return locationRequestRef.current
+
     setGeoStatus('locating')
-    navigator.geolocation.getCurrentPosition(
-      (p) => { setUserPos([p.coords.latitude, p.coords.longitude]); setGeoStatus('granted') },
-      () => setGeoStatus('denied'),
-      { enableHighAccuracy: true, timeout: 10000 }
-    )
+
+    locationRequestRef.current = requestDeviceLocation()
+      .then((position) => {
+        const { latitude, longitude } = position.coords
+        setUserPos([latitude, longitude])
+        setGeoStatus('granted')
+        setError(null)
+        return [latitude, longitude]
+      })
+      .catch((err) => {
+        console.error('[Inspect] Geolocation error:', err)
+        setUserPos(null)
+        setGeoStatus('denied')
+        setError(GEOLOCATION_REQUIRED_MESSAGE)
+        return null
+      })
+      .finally(() => {
+        locationRequestRef.current = null
+      })
+
+    return locationRequestRef.current
   }, [])
+
+  useEffect(() => {
+    if (step === 2 && geoStatus === 'idle') getLocation()
+  }, [geoStatus, getLocation, step])
 
   /* Submit to backend */
   const submitAssessment = useCallback(async () => {
     if (!imageFile) return
+    if (!userPos) {
+      setError(GEOLOCATION_REQUIRED_MESSAGE)
+      setStep(2)
+      getLocation()
+      scrollFormIntoView()
+      return
+    }
+    const runId = assessmentRunRef.current + 1
+    assessmentRunRef.current = runId
+    const analysisStartedAt = Date.now()
+    const waitForMinimumAnalysis = () => new Promise((resolve) => {
+      window.setTimeout(resolve, Math.max(0, MIN_ANALYSIS_MS - (Date.now() - analysisStartedAt)))
+    })
+
     setStep(3); setLoading(true); setError(null); setRejected(null)
     let msgIdx = 0
     setLoadingMsg(LOADING_MSGS[0])
@@ -297,21 +361,25 @@ function Inspect() {
       const form = new FormData()
       form.append('image', imageFile)
       form.append('questionnaire', JSON.stringify(questionnaire))
-      if (userPos) { form.append('lat', userPos[0]); form.append('lon', userPos[1]) }
+      form.append('lat', userPos[0]); form.append('lon', userPos[1])
       if (userPos && scenarioEventId) form.append('scenario_event_id', scenarioEventId)
 
       const res = await api.post('/v1/risk-assessment', form, {
         headers: { 'Content-Type': 'multipart/form-data' },
         timeout: 60000,
       })
+      await waitForMinimumAnalysis()
+      if (assessmentRunRef.current !== runId) return
 
       stopLoadingTicker()
 
       if (res.data.rejected) {
-        setRejected(res.data); setStep(0); setLoading(false); return
+        setRejected(res.data); setStep(0); setQuestionnaireSlide(0); setLoading(false); scrollFormIntoView(); return
       }
-      setResult(res.data); setStep(4); setLoading(false)
+      setResult(res.data); setStep(4); setLoading(false); scrollFormIntoView()
     } catch (err) {
+      await waitForMinimumAnalysis()
+      if (assessmentRunRef.current !== runId) return
       stopLoadingTicker()
       console.error('[Inspect] Assessment error:', err)
       const details = err.response?.data?.details
@@ -325,25 +393,57 @@ function Inspect() {
           : err.code === 'ERR_NETWORK'
             ? 'Unable to reach the server. Make sure the backend is running.'
             : 'Assessment failed. Please try again.'
-      setError(msg); setStep(2); setLoading(false)
+      setError(msg); setStep(2); setLoading(false); scrollFormIntoView()
     }
-  }, [imageFile, questionnaire, scenarioEventId, stopLoadingTicker, userPos])
+  }, [getLocation, imageFile, questionnaire, scenarioEventId, scrollFormIntoView, stopLoadingTicker, userPos])
 
   const openGalleryPicker = () => galleryRef.current?.click()
   const openCameraPicker = () => cameraRef.current?.click()
+  const openQuestionnaireFaq = (event) => {
+    event.preventDefault()
+    const faq = document.getElementById('faq-questionnaires')
+    window.history.pushState(null, '', '#faq-questionnaires')
+    window.dispatchEvent(new Event('hashchange'))
+    faq?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 
   /* Navigation */
-  const canNext = step === 0 ? !!imageFile : true
+  const canNext = step === 0 ? !!imageFile : step === 2 ? !!userPos && geoStatus === 'granted' : true
   const goBack = () => {
     setError(null)
-    if (step === 1 && questionnaireSlide > 0) { setQuestionnaireSlide((current) => current - 1); return }
+    if (step === 1 && questionnaireSlide > 0) {
+      setQuestionnaireSlide((current) => current - 1)
+      scrollFormIntoView()
+      return
+    }
     setStep(s => Math.max(0, s - 1))
+    scrollFormIntoView()
   }
   const goNext = () => {
     setError(null)
-    if (step === 1 && questionnaireSlide < Q_SLIDES.length - 1) { setQuestionnaireSlide((current) => current + 1); return }
-    if (step === 2) { submitAssessment(); return }
+    if (step === 1 && questionnaireSlide < Q_SLIDES.length - 1) {
+      setQuestionnaireSlide((current) => current + 1)
+      scrollFormIntoView()
+      return
+    }
+    if (step === 2) {
+      if (!userPos) {
+        setError(GEOLOCATION_REQUIRED_MESSAGE)
+        getLocation()
+        scrollFormIntoView()
+        return
+      }
+      submitAssessment()
+      scrollFormIntoView()
+      return
+    }
     setStep(s => Math.min(STEPS.length - 1, s + 1))
+    scrollFormIntoView()
+  }
+
+  const backToLocation = () => {
+    setStep(2)
+    scrollFormIntoView()
   }
 
   const activeStep = STEPS[step]
@@ -364,7 +464,7 @@ function Inspect() {
         </motion.div>
 
         {/* Left: form */}
-        <motion.div className={`mx-auto w-full ${step === 4 ? 'max-w-none lg:col-span-2' : 'max-w-[520px] lg:flex lg:flex-col'}`} variants={sectionItem}>
+        <motion.div ref={formRef} className={`mx-auto w-full ${step === 4 ? 'max-w-none lg:col-span-2' : 'max-w-[520px] lg:flex lg:flex-col'}`} variants={sectionItem}>
           <input ref={galleryRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden"
             onChange={(e) => { handleFile(e.target.files[0]); e.target.value = '' }} />
           <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden"
@@ -400,14 +500,14 @@ function Inspect() {
 
           <div className={step === 4 ? '' : 'lg:flex-1'}>
             <AnimatePresence mode="wait">
-              <motion.div className={step === 4 ? '' : 'h-full'} key={step} initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -18 }} transition={{ duration: 0.25 }}>
+              <motion.div className={step === 4 ? '' : 'h-full'} key={`${step}-${step === 1 ? questionnaireSlide : 'stage'}`} initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -18 }} transition={{ duration: 0.25 }}>
 
                 {/* Step 0: Upload */}
                 {step === 0 && (
-                  <div className="grid h-full gap-[18px]">
+                  <div className="grid h-full content-center gap-[18px]">
                     <StepInfoPanel step={step} className="h-full" />
                     {!imagePreview && (
-                      <div className="border border-[#c8c8c8] bg-[#f4f4f4] p-5">
+                      <div className="grid content-center border border-[#c8c8c8] bg-[#f4f4f4] p-5">
                         <p className={`m-0 text-[#333] ${type.label}`}>Use the capture panel on the right</p>
                         <p className={`m-0 mt-2 text-[#777] ${type.bodySmall}`}>
                           Capture a building image from your phone or choose an existing JPEG, PNG, or WebP photo.
@@ -419,7 +519,7 @@ function Inspect() {
 
                 {/* Step 1: Questionnaire */}
                 {step === 1 && (
-                  <div className="grid h-full gap-5">
+                  <div className="grid h-full content-center gap-5">
                     <div className="flex items-center justify-between border border-[#c8c8c8] bg-[#fafafa] p-4">
                       <div>
                         <p className={`m-0 text-[#ff5330] ${type.overline}`}>Part {questionnaireSlide + 1} of {Q_SLIDES.length}</p>
@@ -457,13 +557,20 @@ function Inspect() {
                         </div>
                       ))}
                     </div>
+                    <a
+                      href="#faq-questionnaires"
+                      className={`justify-self-start text-[#ff5330] underline-offset-4 hover:underline ${type.label}`}
+                      onClick={openQuestionnaireFaq}
+                    >
+                      Don't know what to answer? Check out the FAQ!
+                    </a>
                   </div>
                 )}
 
                 {/* Step 2: Location */}
                 {step === 2 && (
-                  <div className="grid h-full gap-[18px]">
-                    <div className="flex flex-col items-center gap-4 border border-[#c8c8c8] bg-[#f4f4f4] p-6 text-center">
+                  <div className="grid h-full content-center gap-[18px]">
+                    <div className="flex flex-col items-center justify-center gap-4 border border-[#c8c8c8] bg-[#f4f4f4] p-6 text-center">
                       {geoStatus === 'granted' && userPos ? (
                         <>
                           <div className="grid h-14 w-14 place-items-center rounded-full bg-[#f0fdf4]">
@@ -485,7 +592,7 @@ function Inspect() {
                             <LocateFixed size={24} className="text-[#ff5330]" />
                           </div>
                           <p className={`m-0 text-[#333] ${type.label}`}>
-                            {geoStatus === 'denied' ? 'Location access denied' : 'Enable location for better results'}
+                            {geoStatus === 'denied' ? 'Location access required' : 'Allow location to continue'}
                           </p>
                           <motion.button className={darkBtn} type="button" onClick={getLocation} whileTap={buttonTap}>
                             <LocateFixed size={15} />
@@ -495,9 +602,9 @@ function Inspect() {
                       )}
                     </div>
                     <p className={`m-0 text-center text-[#999] ${type.legal}`}>
-                      Location is used for site hazard analysis only and is never stored.
+                      Location is required for site hazard analysis and is never stored.
                     </p>
-                    <div className="grid gap-2 border border-[#c8c8c8] bg-[#fafafa] p-4">
+                    <div className="grid content-center gap-2 border border-[#c8c8c8] bg-[#fafafa] p-4">
                       <span className={`flex items-center gap-2 text-[#333] ${type.label}`}>
                         <MapPin size={15} className="text-[#ff5330]" />
                         Scenario shaking model
@@ -515,7 +622,7 @@ function Inspect() {
                         ))}
                       </select>
                       <p className={`m-0 text-[#888] ${type.legal}`}>
-                        Optional. Requires location and adds scenario shaking to the final score when backend scenario data exists nearby.
+                        Requires location and adds scenario shaking to the final score when backend scenario data exists nearby.
                       </p>
                     </div>
                   </div>
@@ -523,8 +630,8 @@ function Inspect() {
 
                 {/* Step 3: Processing — left side shows pipeline info, right side blurs */}
                 {step === 3 && (
-                  <div className="grid h-full gap-5">
-                    <div className="flex flex-col items-center gap-4 border border-[#fed7aa] bg-[#fff7ed] p-8 text-center">
+                  <div className="grid h-full content-center gap-5">
+                    <div className="flex flex-col items-center justify-center gap-4 border border-[#fed7aa] bg-[#fff7ed] p-8 text-center">
                       <div className="grid h-16 w-16 place-items-center rounded-full bg-[#fff0ed]">
                         <Scan size={28} className="text-[#ff5330]" />
                       </div>
@@ -543,7 +650,7 @@ function Inspect() {
 
                 {/* Step 4: Results */}
                 {step === 4 && result && (
-                  <InspectResults result={result} imagePreview={imagePreview} onBack={() => setStep(2)} onReset={reset} />
+                  <InspectResults result={result} imagePreview={imagePreview} onBack={backToLocation} onReset={reset} />
                 )}
               </motion.div>
             </AnimatePresence>

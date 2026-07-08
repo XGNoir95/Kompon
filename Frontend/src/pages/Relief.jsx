@@ -18,6 +18,7 @@ import { MapContainer, TileLayer, Marker, Popup, Circle, Polyline, useMap } from
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { api } from '../config/api.js'
+import { GEOLOCATION_REQUIRED_MESSAGE, requestDeviceLocation } from '../lib/geolocation.js'
 import { buttonHover, buttonTap, sectionGroup, sectionItem, sectionViewport } from '../lib/motion.js'
 import { type } from '../lib/typography.js'
 import FireServiceSection, { DEFAULT_NATIONAL_FALLBACK } from '../components/FireServiceSection.jsx'
@@ -217,6 +218,7 @@ function Relief() {
   const [routeStatus, setRouteStatus] = useState('idle')
   const radiusRef = useRef(null)
   const routeAbortRef = useRef(null)
+  const locationRequestRef = useRef(null)
 
   // ─── Fire brigade state ───
   const [fireStations, setFireStations] = useState([])
@@ -453,16 +455,18 @@ function Relief() {
 
   // ─── Get user location + fetch ───
   const locateAndFetch = useCallback(
-    (radius = radiusM) => {
-      if (!navigator.geolocation) {
-        setError('Geolocation is not supported by your browser.')
-        return
-      }
+    async (radius = radiusM) => {
+      if (locationRequestRef.current) return locationRequestRef.current
 
       setGeoStatus('locating')
+      setError(null)
+      setPlaces([])
+      setUserPos(null)
+      setRouteCoords([])
+      setRouteStatus('idle')
 
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
+      locationRequestRef.current = requestDeviceLocation()
+        .then((position) => {
           const { latitude, longitude } = position.coords
 
           setUserPos([latitude, longitude])
@@ -472,20 +476,26 @@ function Relief() {
 
           fetchPlaces(latitude, longitude, radius)
           fetchFireBrigade(latitude, longitude)
-        },
-        (err) => {
+        })
+        .catch((err) => {
           console.error('[Relief] Geolocation error:', err)
 
           setGeoStatus('denied')
-          setUserPos(DEFAULT_CENTER)
+          setUserPos(null)
           setMapCenter(DEFAULT_CENTER)
-          setGeoStatus('granted')
+          setMapZoom(DEFAULT_ZOOM)
+          setPlaces([])
+          setFireStations([])
+          setFireDistrict(null)
+          setFireNote(null)
+          setError(GEOLOCATION_REQUIRED_MESSAGE)
+          setFireError(GEOLOCATION_REQUIRED_MESSAGE)
+        })
+        .finally(() => {
+          locationRequestRef.current = null
+        })
 
-          fetchPlaces(DEFAULT_CENTER[0], DEFAULT_CENTER[1], radius)
-          fetchFireBrigade(DEFAULT_CENTER[0], DEFAULT_CENTER[1])
-        },
-        { enableHighAccuracy: true, timeout: 10000 }
-      )
+      return locationRequestRef.current
     },
     [radiusM, fetchPlaces, fetchFireBrigade]
   )
@@ -498,6 +508,8 @@ function Relief() {
     if (userPos) {
       setMapZoom(newRadius <= 1000 ? 15 : newRadius <= 2000 ? 14 : 13)
       fetchPlaces(userPos[0], userPos[1], newRadius)
+    } else {
+      locateAndFetch(newRadius)
     }
   }
 
@@ -662,14 +674,14 @@ function Relief() {
 
           {geoStatus === 'idle' && (
             <small className={`block !text-center text-[#5e5e5e] ${type.legal}`}>
-              We&apos;ll use your device location to search for nearby open areas.
+              We&apos;ll ask for your device location to search for nearby open areas.
               Your location is never stored.
             </small>
           )}
 
           {geoStatus === 'denied' && (
             <small className={`block !text-center text-[#c4421a] ${type.legal}`}>
-              Location access was denied. Showing results around Dhaka center instead.
+              Location access is required. Enable location permission in your browser or device settings, then try again.
             </small>
           )}
         </motion.div>
@@ -781,6 +793,8 @@ function Relief() {
                       ? 'Searching nearby open places…'
                       : geoStatus === 'granted'
                       ? 'No open places shown yet'
+                      : geoStatus === 'denied'
+                      ? 'Location permission is required'
                       : 'Click "Find Open Places" to start'}
                   </p>
                   <p className={`m-0 mt-1 text-[#777] ${type.legal}`}>
