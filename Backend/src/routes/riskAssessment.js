@@ -14,6 +14,7 @@ import {
   computeStructuralVulnerability,
   deriveEffectiveCrackSeverity,
   deriveCrackEvidence,
+  deriveScenarioShakingScore,
   combineScores,
   generateChecklist,
 } from "../services/scoringEngine.js";
@@ -452,16 +453,42 @@ router.post(
                   50,
               };
 
-              const scenarioResult = await inferScenarioScore(features);
-              scenarioScore = Number.isFinite(Number(scenarioResult?.score))
-                ? Number(scenarioResult.score)
-                : null;
+              let scenarioResult = null;
+              let liquefactionScore = null;
+              let scenarioModelError = null;
+
+              try {
+                scenarioResult = await inferScenarioScore(features);
+                liquefactionScore = Number.isFinite(Number(scenarioResult?.score))
+                  ? Number(scenarioResult.score)
+                  : null;
+              } catch (err) {
+                scenarioModelError = err;
+                console.error("[RiskAssessment] Scenario ML model error:", err.message);
+              }
+
+              const scenarioImpact = deriveScenarioShakingScore(features, liquefactionScore);
+              scenarioScore = Number.isFinite(Number(scenarioImpact?.score))
+                ? Number(scenarioImpact.score)
+                : liquefactionScore;
               scenarioData = {
-                ...scenarioResult,
+                ...(scenarioResult ?? {}),
+                score: scenarioScore,
+                scenario_shaking_impact_score: scenarioScore,
+                scenario_shaking_score: scenarioImpact?.shaking_score ?? null,
+                scenario_liquefaction_score: liquefactionScore,
+                scenario_score_components: scenarioImpact,
                 event_id: scenarioEventId,
               };
               scenarioStatus = scenarioScore !== null
-                ? { requested: true, event_id: scenarioEventId, status: "scored", reason: null }
+                ? {
+                    requested: true,
+                    event_id: scenarioEventId,
+                    status: scenarioModelError ? "scored_with_shaking_fallback" : "scored",
+                    reason: scenarioModelError
+                      ? "The scenario liquefaction model failed, so scenario shaking was scored from MMI, PGA, PGV, and site susceptibility."
+                      : null,
+                  }
                 : {
                     requested: true,
                     event_id: scenarioEventId,

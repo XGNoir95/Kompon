@@ -91,7 +91,9 @@ export default function InspectResults({ result, imagePreview, onBack, onReset }
   const TierIcon = cfg.icon
   const bd = result.breakdown || {}
   const scenarioStatus = result.scenario_status
-  const scenarioIssue = scenarioStatus?.requested && scenarioStatus.status !== 'scored'
+  const scenarioScored = scenarioStatus?.status === 'scored' || scenarioStatus?.status === 'scored_with_shaking_fallback'
+  const scenarioIssue = scenarioStatus?.requested && !scenarioScored
+  const scenarioNotice = scenarioStatus?.status === 'scored_with_shaking_fallback'
 
   return (
     <motion.div
@@ -152,6 +154,20 @@ export default function InspectResults({ result, imagePreview, onBack, onReset }
                 <AlertTriangle size={18} className="mt-0.5 shrink-0 text-[#c2410c]" />
                 <p className={`m-0 text-[#7c2d12] ${type.bodySmall}`}>
                   {scenarioStatus.reason || 'The selected scenario could not be applied, so the static site hazard score was used instead.'}
+                </p>
+              </motion.div>
+            )}
+
+            {scenarioNotice && (
+              <motion.div
+                className="flex items-start gap-3 border border-[#fed7aa] bg-[#fff7ed] px-4 py-3"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.48 }}
+              >
+                <AlertTriangle size={18} className="mt-0.5 shrink-0 text-[#c2410c]" />
+                <p className={`m-0 text-[#7c2d12] ${type.bodySmall}`}>
+                  {scenarioStatus.reason}
                 </p>
               </motion.div>
             )}

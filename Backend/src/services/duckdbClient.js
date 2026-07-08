@@ -354,10 +354,13 @@ export async function getHazardHeatmapLayers(options = {}) {
 
   if (includeScenarios) {
     for (const eventId of SCENARIO_EVENT_IDS) {
+      const { filePath } = getScenarioDataAvailability(eventId);
+      if (!filePath) continue;
+
       const scenarioLayer = await queryHeatmapLayer({
         id: eventId,
         label: `Scenario ${eventId.replace('event_', '')} shaking`,
-        filePath: path.join(DATA_DIR, scenarioFileNameFromEventId(eventId)),
+        filePath,
         valueColumn: 'mmi_filled',
         metric: 'Modified Mercalli intensity',
         scoreSql: `
