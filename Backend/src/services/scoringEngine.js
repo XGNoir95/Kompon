@@ -99,6 +99,16 @@ const SEVERITY_TIER_BASE = {
   "Very High": 95,
 };
 
+const SEVERITY_TIER_RANK = {
+  "Very Low": 0,
+  Low: 1,
+  Moderate: 2,
+  High: 3,
+  "Very High": 4,
+};
+
+const RANK_TO_SEVERITY_TIER = ["Very Low", "Low", "Moderate", "High", "Very High"];
+
 function normalizeSeverityTier(value) {
   const token = String(value ?? "").trim().toLowerCase().replace(/\s+/g, "_");
   if (token === "very_low") return "Very Low";
@@ -110,9 +120,93 @@ function normalizeSeverityTier(value) {
 }
 
 function readCoveragePct(detection) {
-  const raw = Number(detection.coverage_pct ?? detection.coverage ?? 0);
+  if (detection?.coverage_pct !== undefined) {
+    const pct = Number(detection.coverage_pct);
+    return Number.isFinite(pct) && pct > 0 ? pct : 0;
+  }
+
+  const raw = Number(detection?.coverage ?? 0);
   if (!Number.isFinite(raw) || raw <= 0) return 0;
   return raw <= 1 ? raw * 100 : raw;
+}
+
+function normalizeDetectionClass(detection) {
+  return String(detection?.class ?? detection?.label ?? detection?.name ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+}
+
+function readConfidence(detection) {
+  const raw = Number(detection?.confidence ?? detection?.conf ?? detection?.score ?? 0);
+  return Number.isFinite(raw) && raw > 0 ? raw : 0;
+}
+
+function maxTier(a, b) {
+  return (SEVERITY_TIER_RANK[a] ?? 0) >= (SEVERITY_TIER_RANK[b] ?? 0) ? a : b;
+}
+
+function tierForDetection(detection) {
+  const cls = normalizeDetectionClass(detection);
+  const confidence = readConfidence(detection);
+  const coverage = readCoveragePct(detection);
+
+  if (cls === "rebar_corrosion" || cls === "severe_distress" || cls === "crushing") {
+    return "Very High";
+  }
+
+  if (cls === "spalling") {
+    if (coverage >= 15) return "Very High";
+    if (coverage >= 5 || confidence >= 0.75) return "High";
+    return "Moderate";
+  }
+
+  if (cls === "structural_crack") {
+    if (coverage >= 10) return "Very High";
+    if (coverage >= 2 || (coverage >= 0.5 && confidence >= 0.75)) return "High";
+    if (coverage >= 0.15 || confidence >= 0.5) return "Moderate";
+    return "Low";
+  }
+
+  if (cls === "microcrack" || cls === "non_structural_crack" || cls === "hairline_crack") {
+    if (coverage >= 5 && confidence >= 0.65) return "Moderate";
+    return "Low";
+  }
+
+  if (/rebar|exposed|corrosion|severe|crushing/.test(cls)) return "Very High";
+  if (/spall/.test(cls)) return coverage >= 5 ? "High" : "Moderate";
+  if (/crack|fracture/.test(cls)) {
+    if (coverage >= 2 || confidence >= 0.75) return "High";
+    return "Moderate";
+  }
+
+  return null;
+}
+
+export function deriveEffectiveCrackSeverity(crackAnalysis) {
+  const reportedTier = normalizeSeverityTier(crackAnalysis?.severity_tier ?? crackAnalysis?.concern);
+  const detections = Array.isArray(crackAnalysis?.detections)
+    ? crackAnalysis.detections
+    : [];
+
+  if (detections.length === 0) return reportedTier;
+
+  let effectiveTier = "Very Low";
+  let sawKnownDamage = false;
+
+  for (const detection of detections) {
+    const tier = tierForDetection(detection);
+    if (!tier) continue;
+    sawKnownDamage = true;
+    effectiveTier = maxTier(effectiveTier, tier);
+  }
+
+  if (!sawKnownDamage) return reportedTier;
+  if (!reportedTier) return effectiveTier;
+
+  const reportedRank = SEVERITY_TIER_RANK[reportedTier] ?? 0;
+  const effectiveRank = SEVERITY_TIER_RANK[effectiveTier] ?? 0;
+  return RANK_TO_SEVERITY_TIER[Math.min(reportedRank, effectiveRank)];
 }
 
 /**
@@ -122,12 +216,13 @@ function readCoveragePct(detection) {
  * @returns {number} score 0–100
  */
 export function deriveCrackEvidence(crackAnalysis) {
-  if (!normalizeSeverityTier(crackAnalysis?.severity_tier ?? crackAnalysis?.concern)) {
+  const effectiveTier = deriveEffectiveCrackSeverity(crackAnalysis);
+
+  if (!effectiveTier) {
     return 0; // no crack data — will be excluded from weighting
   }
 
-  const baseTier = normalizeSeverityTier(crackAnalysis?.severity_tier ?? crackAnalysis?.concern);
-  let score = SEVERITY_TIER_BASE[baseTier] ?? 50;
+  let score = SEVERITY_TIER_BASE[effectiveTier] ?? 50;
 
   // Optional ±10 nudge by coverage_pct within tier
   if (
@@ -176,19 +271,23 @@ export function combineScores({
   crackAnalysis,
   gate,
 }) {
+  const hasScenarioScore = scenarioScore !== null && scenarioScore !== undefined;
+  const hasSiteHazardScore = siteHazardScore !== null && siteHazardScore !== undefined;
+  const locationWeight = BASE_WEIGHTS.siteHazard + BASE_WEIGHTS.scenario;
+
   // Determine which components are included
   const components = {
     structural: { score: structuralScore, weight: BASE_WEIGHTS.structural, included: true },
     crack: { score: crackScore, weight: BASE_WEIGHTS.crack, included: true },
     siteHazard: {
       score: siteHazardScore,
-      weight: BASE_WEIGHTS.siteHazard,
-      included: siteHazardScore !== null && siteHazardScore !== undefined,
+      weight: hasScenarioScore ? 0 : BASE_WEIGHTS.siteHazard,
+      included: !hasScenarioScore && hasSiteHazardScore,
     },
     scenario: {
       score: scenarioScore,
-      weight: BASE_WEIGHTS.scenario,
-      included: scenarioScore !== null && scenarioScore !== undefined,
+      weight: locationWeight,
+      included: hasScenarioScore,
     },
   };
 
@@ -212,7 +311,7 @@ export function combineScores({
   let escalationApplied = false;
   let engineerReferralRecommended = false;
 
-  const severityTier = normalizeSeverityTier(crackAnalysis?.severity_tier ?? crackAnalysis?.concern);
+  const severityTier = deriveEffectiveCrackSeverity(crackAnalysis);
 
   if (
     severityTier === "High" ||
@@ -244,15 +343,17 @@ export function combineScores({
       crack_evidence: {
         score: crackScore,
         weight: components.crack.adjustedWeight ?? BASE_WEIGHTS.crack,
+        effective_tier: severityTier,
       },
       site_hazard: {
         score: siteHazardScore ?? null,
-        weight: components.siteHazard.adjustedWeight ?? BASE_WEIGHTS.siteHazard,
+        weight: components.siteHazard.adjustedWeight ?? components.siteHazard.weight,
         included: components.siteHazard.included,
+        replaced_by_scenario: hasScenarioScore,
       },
       scenario_shaking: {
         score: scenarioScore ?? null,
-        weight: components.scenario.adjustedWeight ?? BASE_WEIGHTS.scenario,
+        weight: components.scenario.adjustedWeight ?? components.scenario.weight,
         included: components.scenario.included,
       },
     },
@@ -308,6 +409,7 @@ export function generateChecklist(finalTier, breakdown) {
 export default {
   scoreToTier,
   computeStructuralVulnerability,
+  deriveEffectiveCrackSeverity,
   deriveCrackEvidence,
   combineScores,
   generateChecklist,

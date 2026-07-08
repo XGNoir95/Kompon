@@ -12,11 +12,16 @@ import { rateLimit } from "../middleware/rateLimit.js";
 import { inferImageRisk, inferScenarioScore } from "../services/mlClient.js";
 import {
   computeStructuralVulnerability,
+  deriveEffectiveCrackSeverity,
   deriveCrackEvidence,
   combineScores,
   generateChecklist,
 } from "../services/scoringEngine.js";
-import { getNearestHazardPoint, getNearestScenarioPoint } from "../services/duckdbClient.js";
+import {
+  getNearestHazardPoint,
+  getNearestScenarioPoint,
+  getScenarioDataAvailability,
+} from "../services/duckdbClient.js";
 import { VALID_EVENT_IDS, questionnaireSchema } from "../middleware/validate.js";
 
 const router = Router();
@@ -85,7 +90,12 @@ function readConfidence(detection) {
 }
 
 function readCoveragePct(detection) {
-  const raw = Number(detection.coverage_pct ?? detection.coverage ?? 0);
+  if (detection?.coverage_pct !== undefined) {
+    const pct = Number(detection.coverage_pct);
+    return Number.isFinite(pct) && pct > 0 ? pct : 0;
+  }
+
+  const raw = Number(detection?.coverage ?? 0);
   if (!Number.isFinite(raw) || raw <= 0) return 0;
   return raw <= 1 ? raw * 100 : raw;
 }
@@ -102,7 +112,9 @@ function summarizeCrackEvidence(crackAnalysis) {
     };
   }
 
-  const severityTier = normalizeTier(crackAnalysis.severity_tier ?? crackAnalysis.concern);
+  const severityTier =
+    deriveEffectiveCrackSeverity(crackAnalysis) ??
+    normalizeTier(crackAnalysis.severity_tier ?? crackAnalysis.concern);
   const severityRank = CRACK_SEVERITY_RANK[severityTier] ?? -1;
   const detections = Array.isArray(crackAnalysis.detections)
     ? crackAnalysis.detections
@@ -399,41 +411,83 @@ router.post(
       // ── Step 5: Scenario scoring (if location + event_id provided) ──
       let scenarioScore = null;
       let scenarioData = null;
+      let scenarioStatus = scenarioEventId
+        ? { requested: true, event_id: scenarioEventId, status: "pending", reason: null }
+        : { requested: false, event_id: null, status: "not_requested", reason: null };
       if (hasLocation && scenarioEventId) {
         try {
-          // Look up pre-computed scenario features for this location and event
-          const scenarioPoint = await getNearestScenarioPoint(scenarioEventId, lat, lon);
-
-          if (scenarioPoint) {
-            // Call HF Space for Model 3 scenario score
-            const features = {
-              vs30: finiteOr(scenarioPoint.vs30 ?? hazardPointData?.vs30, 250),
-              elevation_m: finiteOr(scenarioPoint.elevation_m, 10),
-              slope_deg: finiteOr(scenarioPoint.slope_deg, 0.5),
-              dist_water_m: finiteOr(scenarioPoint.dist_water_m, 1000),
-              water_occurrence_pct: finiteOr(scenarioPoint.water_occurrence_pct, 0),
-              geology_class: textOr(scenarioPoint.geology_class, "Unknown"),
-              hand_m: finiteOr(scenarioPoint.hand_m, 10),
-              water_max_extent: finiteOr(scenarioPoint.water_max_extent, 0),
-              dynamic_label_name: textOr(scenarioPoint.dynamic_label_name, "Unknown"),
-              magnitude: requiredFinite(scenarioPoint.magnitude, "magnitude"),
-              depth_km: requiredFinite(scenarioPoint.depth_km, "depth_km"),
-              dist_epicenter_km: requiredFinite(scenarioPoint.dist_epicenter_km, "dist_epicenter_km"),
-              pga_g_filled: requiredFinite(scenarioPoint.pga_g_filled, "pga_g_filled"),
-              pgv_cms_filled: requiredFinite(scenarioPoint.pgv_cms_filled, "pgv_cms_filled"),
-              mmi_filled: requiredFinite(scenarioPoint.mmi_filled, "mmi_filled"),
-              ground_susceptibility_score:
-                scenarioPoint.ground_susceptibility_score ??
-                siteHazardScore ??
-                50,
+          const availability = getScenarioDataAvailability(scenarioEventId);
+          if (!availability.available) {
+            scenarioStatus = {
+              requested: true,
+              event_id: scenarioEventId,
+              status: "unavailable",
+              reason:
+                "Scenario serving data is not available on this backend instance, so the static site hazard score was used instead.",
+              expected_files: availability.expectedFiles,
             };
+          } else {
+            const scenarioPoint = await getNearestScenarioPoint(scenarioEventId, lat, lon);
 
-            const scenarioResult = await inferScenarioScore(features);
-            scenarioScore = scenarioResult?.score ?? null;
-            scenarioData = scenarioResult;
+            if (scenarioPoint) {
+              const features = {
+                vs30: finiteOr(scenarioPoint.vs30 ?? hazardPointData?.vs30, 250),
+                elevation_m: finiteOr(scenarioPoint.elevation_m, 10),
+                slope_deg: finiteOr(scenarioPoint.slope_deg, 0.5),
+                dist_water_m: finiteOr(scenarioPoint.dist_water_m, 1000),
+                water_occurrence_pct: finiteOr(scenarioPoint.water_occurrence_pct, 0),
+                geology_class: textOr(scenarioPoint.geology_class, "Unknown"),
+                hand_m: finiteOr(scenarioPoint.hand_m, 10),
+                water_max_extent: finiteOr(scenarioPoint.water_max_extent, 0),
+                dynamic_label_name: textOr(scenarioPoint.dynamic_label_name, "Unknown"),
+                magnitude: requiredFinite(scenarioPoint.magnitude, "magnitude"),
+                depth_km: requiredFinite(scenarioPoint.depth_km, "depth_km"),
+                dist_epicenter_km: requiredFinite(scenarioPoint.dist_epicenter_km, "dist_epicenter_km"),
+                pga_g_filled: requiredFinite(scenarioPoint.pga_g_filled, "pga_g_filled"),
+                pgv_cms_filled: requiredFinite(scenarioPoint.pgv_cms_filled, "pgv_cms_filled"),
+                mmi_filled: requiredFinite(scenarioPoint.mmi_filled, "mmi_filled"),
+                ground_susceptibility_score:
+                  scenarioPoint.ground_susceptibility_score ??
+                  siteHazardScore ??
+                  50,
+              };
+
+              const scenarioResult = await inferScenarioScore(features);
+              scenarioScore = Number.isFinite(Number(scenarioResult?.score))
+                ? Number(scenarioResult.score)
+                : null;
+              scenarioData = {
+                ...scenarioResult,
+                event_id: scenarioEventId,
+              };
+              scenarioStatus = scenarioScore !== null
+                ? { requested: true, event_id: scenarioEventId, status: "scored", reason: null }
+                : {
+                    requested: true,
+                    event_id: scenarioEventId,
+                    status: "failed",
+                    reason:
+                      "The scenario model did not return a numeric score, so the static site hazard score was used instead.",
+                  };
+            } else {
+              scenarioStatus = {
+                requested: true,
+                event_id: scenarioEventId,
+                status: "no_nearby_point",
+                reason:
+                  "No nearby scenario grid point was found for this location, so the static site hazard score was used instead.",
+              };
+            }
           }
         } catch (err) {
           console.error("[RiskAssessment] Scenario scoring error:", err.message);
+          scenarioStatus = {
+            requested: true,
+            event_id: scenarioEventId,
+            status: "failed",
+            reason:
+              "Scenario scoring failed, so the static site hazard score was used instead.",
+          };
           // Continue without scenario — it's optional
         }
       }
@@ -463,6 +517,7 @@ router.post(
         crack_analysis: crackAnalysis,
         site_hazard: hazardPointData,
         scenario_shaking: scenarioData,
+        scenario_status: scenarioStatus,
         preparedness_checklist: checklist,
         engineer_referral_recommended: combined.engineer_referral_recommended,
         inputs_used: {
@@ -470,6 +525,7 @@ router.post(
           questionnaire: Object.keys(questionnaire).length > 0,
           location: hasLocation,
           scenario: scenarioScore !== null,
+          scenario_requested: Boolean(scenarioEventId),
         },
         disclaimer:
           "Screening result only — not a safety certificate. Based on a photo, a short questionnaire, and (if provided) location data. Do not use for structural decisions without a licensed engineer.",

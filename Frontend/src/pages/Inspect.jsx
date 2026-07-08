@@ -69,14 +69,14 @@ const Q_SLIDES = [
 ]
 const SCENARIO_EVENTS = [
   { value: '', label: 'No scenario shaking model' },
-  { value: 'event_1', label: 'Mw 6.6 shallow earthquake scenario' },
-  { value: 'event_2', label: 'Mw 6.8 moderate-depth earthquake scenario' },
-  { value: 'event_3', label: 'Mw 7.0 regional earthquake scenario' },
-  { value: 'event_4', label: 'Mw 7.2 major earthquake scenario' },
-  { value: 'event_5', label: 'Mw 7.4 severe shaking scenario' },
-  { value: 'event_6', label: 'Mw 7.6 high-impact earthquake scenario' },
-  { value: 'event_7', label: 'Mw 7.8 extreme earthquake scenario' },
-  { value: 'event_8', label: 'Mw 8.0 maximum planning scenario' },
+  { value: 'event_1', label: 'Mw 6.9 Triyuga, Nepal scenario' },
+  { value: 'event_2', label: 'Mw 6.2 Falam, Myanmar scenario' },
+  { value: 'event_3', label: 'Mw 6.0 Dhekiajuli, India scenario' },
+  { value: 'event_4', label: 'Mw 5.5 Ramganj, Bangladesh scenario' },
+  { value: 'event_5', label: 'Mw 5.4 Tungi, Bangladesh scenario' },
+  { value: 'event_6', label: 'Mw 5.3 Sapatgram, India scenario' },
+  { value: 'event_7', label: 'Mw 5.3 Gyalshing, India scenario' },
+  { value: 'event_8', label: 'Mw 5.0 Satkhira, Bangladesh scenario' },
 ]
 /* ── Loading messages ── */
 const LOADING_MSGS = [

@@ -245,7 +245,7 @@ CRACK_CLASSES = ["microcrack", "structural_crack", "spalling", "rebar_corrosion"
 
 BASE_CONCERN = {
     "microcrack":       "Low",
-    "structural_crack": "High",
+    "structural_crack": "Moderate",
     "spalling":         "Moderate",
     "rebar_corrosion":  "Very High",
     "severe_distress":  "Very High",
@@ -255,6 +255,39 @@ TIER_ORDER = ["Very Low", "Low", "Moderate", "High", "Very High"]
 
 def _tier_max(a, b):
     return a if TIER_ORDER.index(a) >= TIER_ORDER.index(b) else b
+
+
+def visual_concern_for_detection(d: dict) -> str:
+    """Map one detection to a visual-concern tier using class plus evidence strength."""
+    cls = d["class"]
+    conf = float(d.get("confidence", 0.0))
+    coverage = float(d.get("coverage_pct", 0.0))
+
+    if cls in {"rebar_corrosion", "severe_distress"}:
+        return "Very High"
+
+    if cls == "spalling":
+        if coverage >= 15.0:
+            return "Very High"
+        if coverage >= 5.0 or conf >= 0.75:
+            return "High"
+        return "Moderate"
+
+    if cls == "structural_crack":
+        if coverage >= 10.0:
+            return "Very High"
+        if coverage >= 2.0 or (coverage >= 0.5 and conf >= 0.75):
+            return "High"
+        if coverage >= 0.15 or conf >= 0.50:
+            return "Moderate"
+        return "Low"
+
+    if cls == "microcrack":
+        if coverage >= 5.0 and conf >= 0.65:
+            return "Moderate"
+        return "Low"
+
+    return BASE_CONCERN.get(cls, "Moderate")
 
 
 def load_crack_model():
@@ -316,12 +349,7 @@ def severity_from_detections(dets: list) -> dict:
     concern = "Very Low"
     detected = {}
     for d in strong:
-        c = BASE_CONCERN.get(d["class"], "Moderate")
-        # Coverage modulation
-        if d["class"] == "spalling" and d["coverage_pct"] >= 15.0:
-            c = "Very High"
-        if d["class"] == "structural_crack" and d["coverage_pct"] >= 10.0:
-            c = "Very High"
+        c = visual_concern_for_detection(d)
         concern = _tier_max(concern, c)
         detected[d["class"]] = max(detected.get(d["class"], 0.0), d["confidence"])
 

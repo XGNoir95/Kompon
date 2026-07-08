@@ -1,5 +1,6 @@
 import path from 'path';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
 import { DATA_DIR } from '../scripts/fetchServingData.js';
 import {
   getStaticHeatmapCacheStatus,
@@ -18,6 +19,20 @@ const BD_BOUNDS = {
 };
 
 const SCENARIO_EVENT_IDS = Array.from({ length: 8 }, (_, index) => `event_${index + 1}`);
+const SERVICE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const BACKEND_DIR = path.resolve(SERVICE_DIR, '..', '..');
+const LOCAL_SCENARIO_DIR = path.join(BACKEND_DIR, 'data', 'scenario_parquets');
+
+const SCENARIO_EVENT_FILE_ALIASES = {
+  event_1: 'usp0003k6t',
+  event_2: 'us7000fx45',
+  event_3: 'us7000dy3b',
+  event_4: 'us7000lfaa',
+  event_5: 'us6000rpht',
+  event_6: 'us2000hd8v',
+  event_7: 'usp000ea1q',
+  event_8: 'us7000s0pc',
+};
 
 function sqlPath(filePath) {
   return filePath.replace(/\\/g, '/').replace(/'/g, "''");
@@ -62,6 +77,40 @@ function sampleSpatialPoints(points, limit) {
 function scenarioFileNameFromEventId(eventId) {
   const scenarioNumber = String(eventId).replace(/^event_/, '');
   return `scenario_${scenarioNumber}.parquet`;
+}
+
+function scenarioFileCandidatesFromEventId(eventId) {
+  const normalized = String(eventId ?? '').trim();
+  const primary = scenarioFileNameFromEventId(normalized);
+  const alias = SCENARIO_EVENT_FILE_ALIASES[normalized] ?? normalized;
+  return [...new Set([
+    primary,
+    `scenario_${normalized}.parquet`,
+    `scenario_${alias}.parquet`,
+  ])];
+}
+
+function findFirstExistingFile(fileNames) {
+  const dirs = [DATA_DIR, LOCAL_SCENARIO_DIR];
+
+  for (const fileName of fileNames) {
+    for (const dir of dirs) {
+      const filePath = path.join(dir, fileName);
+      if (fs.existsSync(filePath)) return filePath;
+    }
+  }
+
+  return null;
+}
+
+export function getScenarioDataAvailability(eventId) {
+  const expectedFiles = scenarioFileCandidatesFromEventId(eventId);
+  const filePath = findFirstExistingFile(expectedFiles);
+  return {
+    available: Boolean(filePath),
+    filePath,
+    expectedFiles,
+  };
 }
 
 export async function initDuckDB() {
@@ -127,24 +176,26 @@ export async function getNearestScenarioPoint(eventId, lat, lon) {
   if (!duckdbAvailable) return null;
   if (!connection) throw new Error('DuckDB not initialized');
 
-  const scenarioFile = path.join(DATA_DIR, scenarioFileNameFromEventId(eventId));
+  const { filePath: scenarioFile } = getScenarioDataAvailability(eventId);
 
-  if (!fs.existsSync(scenarioFile)) {
-    console.warn(`[DuckDB] Missing data file: ${scenarioFile}`);
+  if (!scenarioFile) {
+    console.warn(`[DuckDB] Missing scenario data file for event: ${eventId}`);
     return null;
   }
+
+  const searchRadiusDeg = 0.08;
 
   const prepared = await connection.prepare(`
     SELECT *,
       (lat - $lat) * (lat - $lat) + (lon - $lon) * (lon - $lon) AS dist2
     FROM read_parquet('${sqlPath(scenarioFile)}')
-    WHERE lat BETWEEN $lat - 0.01 AND $lat + 0.01
-      AND lon BETWEEN $lon - 0.01 AND $lon + 0.01
+    WHERE lat BETWEEN $lat - $searchRadiusDeg AND $lat + $searchRadiusDeg
+      AND lon BETWEEN $lon - $searchRadiusDeg AND $lon + $searchRadiusDeg
     ORDER BY dist2
     LIMIT 1;
   `);
 
-  prepared.bind({ lat, lon });
+  prepared.bind({ lat, lon, searchRadiusDeg });
   const result = await prepared.run();
   const rows = await result.getRows();
   const objects = rowsToObjects(result, rows);
