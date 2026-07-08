@@ -2,8 +2,39 @@ import fs from "fs";
 import path from "path";
 import axios from "axios";
 import os from "os";
+import { fileURLToPath } from "url";
 
 export const DATA_DIR = path.join(os.tmpdir(), "kompon-data");
+
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const BACKEND_DIR = path.resolve(SCRIPT_DIR, "..", "..");
+const LOCAL_SCENARIO_DIR = path.join(BACKEND_DIR, "data", "scenario_parquets");
+
+const SCENARIO_EVENT_FILE_ALIASES = {
+  1: "usp0003k6t",
+  2: "us7000fx45",
+  3: "us7000dy3b",
+  4: "us7000lfaa",
+  5: "us6000rpht",
+  6: "us2000hd8v",
+  7: "usp000ea1q",
+  8: "us7000s0pc",
+};
+
+function findExistingCandidate(candidates) {
+  const dirs = [DATA_DIR, LOCAL_SCENARIO_DIR];
+
+  for (const dir of dirs) {
+    for (const file of candidates) {
+      const filePath = path.join(dir, file);
+      if (fs.existsSync(filePath)) {
+        return { file, filePath };
+      }
+    }
+  }
+
+  return null;
+}
 
 export async function fetchServingData() {
   const repoId = process.env.HF_DATASET_REPO;
@@ -19,47 +50,60 @@ export async function fetchServingData() {
 
   const baseUrl = `https://huggingface.co/datasets/${repoId}/resolve/main`;
   
-  // Hardcoded list of files to download based on the spec
-  // 1 static grid, 8 scenarios
-  const files = [
-    "hazard_grid.parquet",
-    "scenario_1.parquet",
-    "scenario_2.parquet",
-    "scenario_3.parquet",
-    "scenario_4.parquet",
-    "scenario_5.parquet",
-    "scenario_6.parquet",
-    "scenario_7.parquet",
-    "scenario_8.parquet",
+  const fileGroups = [
+    ["hazard_grid.parquet"],
+    ...Array.from({ length: 8 }, (_, index) => {
+      const id = index + 1;
+      const alias = SCENARIO_EVENT_FILE_ALIASES[id];
+      return [
+        `scenario_${id}.parquet`,
+        `scenario_event_${id}.parquet`,
+        `scenario_${alias}.parquet`,
+      ];
+    }),
   ];
 
-  console.log(`[DuckDB] Fetching ${files.length} parquet files from HF Datasets (${repoId})...`);
+  console.log(`[DuckDB] Fetching ${fileGroups.length} parquet data groups from HF Datasets (${repoId})...`);
 
-  for (const file of files) {
-    const dest = path.join(DATA_DIR, file);
-    if (fs.existsSync(dest)) {
-      // Basic check, if exists we skip to save startup time. (In production, could check ETags)
-      console.log(`[DuckDB] File ${file} already exists, skipping download.`);
+  for (const candidates of fileGroups) {
+    const existing = findExistingCandidate(candidates);
+    if (existing) {
+      console.log(`[DuckDB] File ${existing.filePath} already exists, skipping download.`);
       continue;
     }
 
-    try {
-      console.log(`[DuckDB] Downloading ${file}...`);
-      const response = await axios({
-        url: `${baseUrl}/${file}`,
-        method: "GET",
-        responseType: "stream"
-      });
+    let downloaded = false;
+    let lastError = null;
 
-      const writer = fs.createWriteStream(dest);
-      response.data.pipe(writer);
+    for (const file of candidates) {
+      const dest = path.join(DATA_DIR, file);
 
-      await new Promise((resolve, reject) => {
-        writer.on("finish", resolve);
-        writer.on("error", reject);
-      });
-    } catch (err) {
-      console.error(`[DuckDB] Failed to download ${file}:`, err.message);
+      try {
+        console.log(`[DuckDB] Downloading ${file}...`);
+        const response = await axios({
+          url: `${baseUrl}/${file}`,
+          method: "GET",
+          responseType: "stream"
+        });
+
+        const writer = fs.createWriteStream(dest);
+        response.data.pipe(writer);
+
+        await new Promise((resolve, reject) => {
+          writer.on("finish", resolve);
+          writer.on("error", reject);
+        });
+
+        downloaded = true;
+        break;
+      } catch (err) {
+        lastError = err;
+        if (fs.existsSync(dest)) fs.rmSync(dest, { force: true });
+      }
+    }
+
+    if (!downloaded) {
+      console.error(`[DuckDB] Failed to download any of: ${candidates.join(", ")}. Last error: ${lastError?.message}`);
     }
   }
   
