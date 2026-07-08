@@ -250,6 +250,63 @@ const BASE_WEIGHTS = {
   scenario: 0.15,
 };
 
+function clampScore(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.min(100, parsed));
+}
+
+function linearScore(value, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return clampScore(((parsed - min) / (max - min)) * 100);
+}
+
+function logScore(value, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  const logValue = Math.log10(parsed);
+  return clampScore(((logValue - Math.log10(min)) / (Math.log10(max) - Math.log10(min))) * 100);
+}
+
+function weightedAverage(parts) {
+  const valid = parts.filter((part) => part.score !== null && Number.isFinite(part.weight) && part.weight > 0);
+  const weightSum = valid.reduce((sum, part) => sum + part.weight, 0);
+  if (weightSum <= 0) return null;
+
+  return valid.reduce((sum, part) => sum + part.score * (part.weight / weightSum), 0);
+}
+
+export function deriveScenarioShakingScore(features, liquefactionScore = null) {
+  const mmiScore = linearScore(features?.mmi_filled, 2.5, 7.5);
+  const pgaScore = logScore(features?.pga_g_filled, 0.005, 0.4);
+  const pgvScore = logScore(features?.pgv_cms_filled, 0.5, 40);
+  const shakingScore = Math.max(
+    ...[mmiScore, pgaScore, pgvScore].filter((score) => score !== null),
+    0
+  );
+  const groundScore = clampScore(features?.ground_susceptibility_score);
+  const liquefaction = clampScore(liquefactionScore);
+
+  const score = weightedAverage([
+    { score: shakingScore, weight: 0.65 },
+    { score: liquefaction, weight: 0.2 },
+    { score: groundScore, weight: 0.15 },
+  ]);
+
+  if (score === null) return null;
+
+  return {
+    score: Math.round(score * 10) / 10,
+    shaking_score: Math.round(shakingScore * 10) / 10,
+    mmi_score: mmiScore === null ? null : Math.round(mmiScore * 10) / 10,
+    pga_score: pgaScore === null ? null : Math.round(pgaScore * 10) / 10,
+    pgv_score: pgvScore === null ? null : Math.round(pgvScore * 10) / 10,
+    liquefaction_score: liquefaction,
+    ground_susceptibility_score: groundScore,
+  };
+}
+
 /**
  * Combine component scores into a final risk score and tier.
  * Missing components have their weight redistributed proportionally.
@@ -411,6 +468,7 @@ export default {
   computeStructuralVulnerability,
   deriveEffectiveCrackSeverity,
   deriveCrackEvidence,
+  deriveScenarioShakingScore,
   combineScores,
   generateChecklist,
 };

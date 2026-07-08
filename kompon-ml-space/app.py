@@ -424,7 +424,11 @@ def predict_scenario(feature_row: dict) -> dict:
     Returns score (0-100), risk class, and disclaimer.
     Verbatim from the spec — do not reword.
     """
-    x = pd.DataFrame([feature_row])[scenario_feature_list]
+    ordered_features = {
+        feature: feature_row.get(feature, np.nan)
+        for feature in scenario_feature_list
+    }
+    x = pd.DataFrame([ordered_features], columns=scenario_feature_list)
     for col in scenario_cat_cols:
         if col in x.columns:
             x[col] = x[col].astype("category")
@@ -565,9 +569,6 @@ async def infer_scenario_score(request: ScenarioRequest):
     """
     try:
         feature_row = request.model_dump()
-        # Remove fields not in the feature list
-        feature_row.pop("ground_susceptibility_score", None)
-
         result = predict_scenario(feature_row)
         return JSONResponse(content=result)
     except Exception as e:
